@@ -34,6 +34,7 @@ outputs/
 runs/
 checkpoints/
 profile_metrics.png
+logs/
 
 # Environment
 .env
