@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.manifest
+*.spec
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+notebooks/*.ipynb
+
+# Data
+data/
+*.csv
+*.tsv
+*.log
+
+# Model checkpoints and outputs
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.h5
+*.pb
+*.npz
+*.npy
+outputs/
+runs/
+checkpoints/
+profile_metrics.png
+
+# Environment
+.env
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# MacOS
+.DS_Store
+
+# Misc
+*.swp
+*.swo
+*.bak
