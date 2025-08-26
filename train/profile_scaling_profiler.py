@@ -73,7 +73,7 @@ for scale in scales:
 
     print(f"\n=== Profiling: batch={b}, seq={s}, hidden={h}, layers={l} ===")
     dummy_input = torch.randint(0, vocab_size, (b, s), device=device)
-    tb_writer = SummaryWriter(log_dir=f"tb_logs/B{b}_S{s}_H{h}_L{l}")
+    tb_writer = SummaryWriter(log_dir=f"profiler_logs/B{b}_S{s}_H{h}_L{l}")
 
     # Baseline GPT-2
     config = GPT2Config(n_embd=h, n_layer=l, n_head=12)
