@@ -35,6 +35,7 @@ runs/
 checkpoints/
 profile_metrics.png
 logs/
+profiler_logs/
 
 # Environment
 .env
