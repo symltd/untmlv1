@@ -1,42 +1,48 @@
-# gpt2_sparse_config.py
 from transformers import GPT2Config
-from typing import List, Optional
 
 class GPT2SparseConfig(GPT2Config):
     """
-    GPT-2 configuration extended to support:
-    - Dynamic UltraEfficientSparseFFN sparsity per layer
-    - Optional per-layer FFN expansion control
+    GPT2 Config extended to include UltraEfficientSparseFFN hyperparameters.
     """
+    model_type = "gpt2_sparse"
 
     def __init__(
         self,
-        n_embd: int = 768,
-        n_layer: int = 12,
-        n_head: int = 12,
-        ffn_expansion: int = 4,
-        ffn_sparsity: Optional[List[float]] = None,
+        # GPT-2 original params
+        vocab_size=50257,
+        n_positions=1024,
+        n_ctx=1024,
+        n_embd=768,
+        n_layer=12,
+        n_head=12,
+        # Sparse FFN params
+        ffn_k_freq=128,
+        poly_degree=3,
+        poly_keep_ratio=0.5,
+        micro_steps=2,
+        micro_keep_ratio=0.25,
+        ffn_dropout=0.0,
+        use_spectral=True,
+        use_polynomial=True,
+        use_micro=True,
+        residual_gate_init=1.0,
         **kwargs
     ):
-        super().__init__(n_embd=n_embd, n_layer=n_layer, n_head=n_head, **kwargs)
-        self.ffn_expansion = ffn_expansion
-
-        # If sparsity list is provided, use per-layer sparsity; else uniform
-        if ffn_sparsity is not None:
-            assert len(ffn_sparsity) == n_layer, "Length of ffn_sparsity must equal n_layer"
-            self.ffn_sparsity = ffn_sparsity
-        else:
-            self.ffn_sparsity = [0.5] * n_layer  # default 50% sparsity
-
-    def get_ffn_config_for_layer(self, layer_idx: int):
-        """
-        Returns a dict of FFN parameters for a given layer:
-        - hidden_size (d_model)
-        - expansion_factor
-        - sparsity
-        """
-        return {
-            "hidden_size": self.n_embd,
-            "expansion_factor": self.ffn_expansion,
-            "sparsity": self.ffn_sparsity[layer_idx]
-        }
+        super().__init__(vocab_size=vocab_size,
+                         n_positions=n_positions,
+                         n_ctx=n_ctx,
+                         n_embd=n_embd,
+                         n_layer=n_layer,
+                         n_head=n_head,
+                         **kwargs)
+        # Sparse FFN hyperparameters
+        self.ffn_k_freq = ffn_k_freq
+        self.poly_degree = poly_degree
+        self.poly_keep_ratio = poly_keep_ratio
+        self.micro_steps = micro_steps
+        self.micro_keep_ratio = micro_keep_ratio
+        self.ffn_dropout = ffn_dropout
+        self.use_spectral = use_spectral
+        self.use_polynomial = use_polynomial
+        self.use_micro = use_micro
+        self.residual_gate_init = residual_gate_init
