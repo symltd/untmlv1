@@ -1,113 +1,95 @@
-# train/train_dense.py
-
 import os
 import torch
 import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from datasets import load_dataset
-from transformers import GPT2Config, GPT2LMHeadModel, Trainer, TrainingArguments
-
-# ---------------- FLOPs HOOKS ---------------- #
+from transformers import GPT2Tokenizer, GPT2Config, GPT2LMHeadModel
 
 from collections import defaultdict
-FLOP_COUNTER = defaultdict(int)
-PER_LAYER_COUNTER = defaultdict(int)
 
-def count_dense_flops_hook(module, input, output):
-    """Hook to count FLOPs for each nn.Linear forward pass."""
-    if isinstance(module, nn.Linear):
-        batch_size = input[0].shape[0]
-        in_features = module.in_features
-        out_features = module.out_features
-        flops = 2 * batch_size * in_features * out_features
-        FLOP_COUNTER["total"] += flops
-        PER_LAYER_COUNTER[module] += flops
+# ---------------- FLOPs HOOKS ---------------- #
+FLOP_COUNTER = defaultdict(int)
+
+def count_linear_flops(module, input, output):
+    """Count FLOPs for a single nn.Linear."""
+    batch_size = input[0].shape[0]
+    seq_len = input[0].shape[1] if input[0].dim() == 3 else 1
+    in_features = module.in_features
+    out_features = module.out_features
+    FLOP_COUNTER[f"{module.__class__.__name__}"] += 2 * batch_size * seq_len * in_features * out_features
 
 def attach_flop_hooks(model):
-    for module in model.modules():
+    """Attach hooks to all nn.Linear layers in GPT-2 (dense MLPs)."""
+    for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-            module.register_forward_hook(count_dense_flops_hook)
+            module.register_forward_hook(count_linear_flops)
 
 def log_flops_to_tensorboard(step, writer):
-    total_flops = FLOP_COUNTER["total"]
+    """Log per-layer FLOPs and total FLOPs to TensorBoard."""
+    for mod_name, flops in FLOP_COUNTER.items():
+        writer.add_scalar(f"FLOPs/{mod_name}", flops, step)
+    total_flops = sum(FLOP_COUNTER.values())
     writer.add_scalar("FLOPs/total", total_flops, step)
-    for idx, (module, flops) in enumerate(PER_LAYER_COUNTER.items()):
-        writer.add_scalar(f"FLOPs/layer_{idx}_dense", flops, step)
     FLOP_COUNTER.clear()
-    PER_LAYER_COUNTER.clear()
+
+# ---------------- DATASET ---------------- #
+def get_wikitext_dataloader(tokenizer, block_size=128, batch_size=8):
+    dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
+    def tokenize_fn(examples):
+        return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=block_size)
+    tokenized = dataset.map(tokenize_fn, batched=True, remove_columns=["text"])
+    tokenized.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    return DataLoader(tokenized["train"], batch_size=batch_size, shuffle=True)
 
 # ---------------- TRAINING ---------------- #
-
 def main():
-    # Load dataset
-    dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
-    train_texts = dataset["train"]["text"]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Tokenizer (reuse GPT2 tokenizer from HF)
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    def tokenize_function(examples):
-        return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=128)
+    dataloader = get_wikitext_dataloader(tokenizer)
 
-    tokenized_dataset = dataset.map(tokenize_function, batched=True, remove_columns=["text"])
-    tokenized_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
-
-    # Model config + dense GPT-2
     config = GPT2Config(
         vocab_size=tokenizer.vocab_size,
-        n_positions=128,
-        n_ctx=128,
-        n_embd=128,
         n_layer=4,
         n_head=4,
+        n_embd=128,
     )
-    model = GPT2LMHeadModel(config)
 
-    # Attach FLOPs hooks
+    model = GPT2LMHeadModel(config).to(device)
     attach_flop_hooks(model)
 
-    # TensorBoard logging
-    log_dir = os.path.join("runs", "dense_gpt2")
-    writer = SummaryWriter(log_dir=log_dir)
+    optimizer = optim.AdamW(model.parameters(), lr=5e-4)
+    writer = SummaryWriter(log_dir="./runs/dense_gpt2")
 
-    # Training args
-    training_args = TrainingArguments(
-        output_dir="./results_dense",
-        overwrite_output_dir=True,
-        num_train_epochs=1,
-        per_device_train_batch_size=8,
-        save_steps=10_000,
-        save_total_limit=1,
-        logging_dir=log_dir,
-        logging_steps=10,
-        report_to=[],  # disable HF default logging
-    )
+    global_step = 0
+    model.train()
 
-    # Custom trainer to inject FLOPs logging
-    class DenseTrainer(Trainer):
-        def training_step(self, model, inputs):
-            model.train()
-            inputs = self._prepare_inputs(inputs)
-            outputs = model(**inputs)
+    for epoch in range(3):
+        for batch in dataloader:
+            inputs = batch["input_ids"].to(device)
+            outputs = model(inputs, labels=inputs)
             loss = outputs.loss
+
+            optimizer.zero_grad()
             loss.backward()
+            optimizer.step()
+
+            # Log loss
+            writer.add_scalar("Loss/train", loss.item(), global_step)
 
             # Log FLOPs
-            log_flops_to_tensorboard(self.state.global_step, writer)
+            log_flops_to_tensorboard(global_step, writer)
 
-            return loss.detach()
+            if global_step % 50 == 0:
+                print(f"Step {global_step} | Loss {loss.item():.4f}")
+            global_step += 1
 
-    trainer = DenseTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_dataset["train"],
-    )
-
-    trainer.train()
     writer.close()
-
 
 if __name__ == "__main__":
     main()
