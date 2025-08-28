@@ -65,9 +65,7 @@ Each transformer block’s MLP has:
 
 The **FLOPs per forward pass** in a block are dominated by these two layers:
 
-\[
-\text{FLOPs} \approx 2 \cdot d_{model} \cdot d_{ff} + 2 \cdot d_{ff} \cdot d_{model}
-\]
+FLOPs ≈ $2 \cdot d_{model} \cdot d_{ff} + 2 \cdot d_{ff} \cdot d_{model}$
 
 - **Memory** and **compute** scale linearly with batch size and sequence length.  
 - **No sparsity** is used.  
