@@ -15,14 +15,7 @@ from collections import defaultdict
 FLOP_COUNTER = defaultdict(int)
 BLOCK_COMPONENTS = defaultdict(lambda: defaultdict(int))  # block_id -> component -> flops
 
-def count_linear_flops(module, input, output):
-    """Count FLOPs for a single nn.Linear."""
-    batch_size = input[0].shape[0]
-    in_features = module.in_features
-    out_features = module.out_features
-    FLOP_COUNTER[f"{module.__class__.__name__}"] += 2 * batch_size * in_features * out_features
-
-def count_sparse_component_flops(module, input, output, block_idx, component):
+def count_component_flops(module, input, output, block_idx, component):
     """Count FLOPs for each UltraEfficientSparseFFN component and store per-block."""
     batch_size, seq_len, hidden_size = input[0].shape
     dense_flops = 2 * batch_size * seq_len * hidden_size * hidden_size
@@ -46,20 +39,16 @@ def attach_flop_hooks(model):
         if isinstance(mlp, UltraEfficientSparseFFN):
             if mlp.use_spectral:
                 mlp.spectral.register_forward_hook(
-                    lambda m, inp, out, i=i: count_sparse_component_flops(m, inp, out, i, "spectral")
+                    lambda m, inp, out, i=i: count_component_flops(m, inp, out, i, "spectral")
                 )
             if mlp.use_polynomial:
                 mlp.poly.register_forward_hook(
-                    lambda m, inp, out, i=i: count_sparse_component_flops(m, inp, out, i, "poly")
+                    lambda m, inp, out, i=i: count_component_flops(m, inp, out, i, "poly")
                 )
             if mlp.use_micro:
                 mlp.micro.register_forward_hook(
-                    lambda m, inp, out, i=i: count_sparse_component_flops(m, inp, out, i, "micro")
+                    lambda m, inp, out, i=i: count_component_flops(m, inp, out, i, "micro")
                 )
-        # Count any dense linear layers as before
-        for name, module in mlp.named_modules():
-            if isinstance(module, nn.Linear):
-                module.register_forward_hook(count_linear_flops)
 
 def log_flops_to_tensorboard(step, writer):
     # Log per-component FLOPs
