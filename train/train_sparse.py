@@ -69,7 +69,7 @@ def log_flops_to_tensorboard(step, writer):
     # Log cumulative per-block sparse FFN FLOPs
     for block_idx, comps in BLOCK_COMPONENTS.items():
         block_total = sum(comps.values())
-        writer.add_scalar(f"FLOPs/block_{block_idx}_total_sparse", block_total, step)
+        writer.add_scalar(f"FLOPs/block_{block_idx}_total", block_total, step)
 
     # Log total FLOPs across all modules
     total_flops = sum(FLOP_COUNTER.values())
