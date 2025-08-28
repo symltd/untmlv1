@@ -81,3 +81,96 @@ for layer in model.h:
 - Profile FLOPs and GPU memory with `torch.profiler` to verify gains.  
 - For larger models, consider mixed precision (fp16/bf16) to further reduce power.
 
+# Sparse FFN Integration Plan
+
+## Phase 1 — Setup and Small Model Debugging
+**Goal:** Test and debug your sparse FFN on a manageable model.
+
+- **Choose the small model:**  
+  GPT-2 small (124M parameters) or GPT-2 medium (355M) from Hugging Face.
+
+- **Integrate Sparse FFN:**  
+  Replace each layer’s FFN (`mlp`) with `UltraEfficientSparseFFN`.  
+  Keep residual connections and LayerNorm intact.
+
+- **Sanity Check Forward Pass:**  
+  Feed a batch of dummy tokens through the modified model.  
+  Verify shapes, outputs, and no NaNs appear.
+
+- **Initial Fine-Tuning (Optional):**  
+  Train on a tiny dataset (~1–10k tokens) to check stability.  
+  Track loss and ensure gradients propagate through sparse FFN.
+
+---
+
+## Phase 2 — FLOPs and Memory Profiling
+**Goal:** Quantify compute and memory efficiency.
+
+- **Use `torch.profiler`:**
+
+```python
+import torch.profiler
+
+with torch.profiler.profile(
+    activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+    record_shapes=True,
+    profile_memory=True
+) as prof:
+    outputs = model(input_ids)
+
+print(prof.key_averages().table(sort_by="cuda_time_total"))
+```
+
+- **Profile for:**  
+  - Standard GPT-2 FFN  
+  - Sparse FFN replacement  
+
+- **Compare:** FLOPs, CUDA time, and memory usage.  
+- **Tune sparsity parameters:** Adjust `k_freq`, `sparsity_ratio`, `micro-step hidden ratio` to optimize FLOPs/power vs output quality.
+
+---
+
+## Phase 3 — Mixed Precision and Larger Models
+**Goal:** Scale to larger models efficiently.
+
+- **Enable mixed precision (fp16/bf16):**
+
+```python
+from torch.cuda.amp import autocast
+
+with autocast(dtype=torch.float16):
+    outputs = model(input_ids)
+```
+
+- Test scaling on GPT-2 medium / large or LLaMA-7B.  
+- Verify memory consumption and FLOPs reductions.  
+- Adjust batch size if needed to fit GPU memory.
+
+- **Optionally combine with LoRA:**  
+  - Freeze attention weights  
+  - Only train sparse FFN parameters for faster fine-tuning
+
+---
+
+## Phase 4 — Evaluation
+- **Output Quality Check:** Compare outputs of the sparse FFN vs original FFN  
+  Metrics: perplexity, BLEU (for language tasks), or other domain-specific metrics
+
+- **Performance Metrics:**  
+  - FLOPs reduction  
+  - GPU memory reduction  
+  - Wall-clock time per forward/backward pass  
+  - Power consumption (if measuring via NVIDIA APIs or energy meters)
+
+- **Iterate:** Adjust sparse FFN design (spectral top-k, polynomial sparsity, micro-step hidden ratio) for optimal tradeoff
+
+---
+
+## Phase 5 — Deployment / Scaling
+- **Integrate into larger models:** Once validated, integrate into GPT-2 large / LLaMA / Mistral models  
+  Keep mixed precision + sparsity tuned
+
+- **Optional optimizations:**  
+  - Fuse spectral + polynomial operations for speed  
+  - Use sparse-friendly libraries (PyTorch sparse tensors or Triton kernels)
+
