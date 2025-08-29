@@ -186,7 +186,7 @@ Apply sparsity in coefficients: many $\alpha_k$ set to zero, or only a subset of
 **Concept:**  
 Iterative micro-steps per token: small linear + activation + gated feedback.  
 Introduce sparsity in:  
-- The weight matrices (low-rank or top-$k$ elements)  
+- The weight matrices (low-rank or $top-k$ elements)  
 - Feedback path (only feed selected features forward)  
 
 **Implementation:**  
@@ -205,7 +205,7 @@ Introduce sparsity in:
 ## 4. Sparse Tensor Factorization FFN
 **Concept:**  
 Represent $W \approx W_1 \otimes W_2$ (tensor factorization)  
-Introduce sparsity in the factor matrices (top-$k$ elements per row/column)
+Introduce sparsity in the factor matrices ($top-k$ elements per row/column)
 
 **Implementation:**  
 - Multiply only non-zero elements  
