@@ -147,11 +147,11 @@ $W \approx W_1 \otimes W_2$
 **Concept:**  
 Take a token embedding $x \in \mathbb{R}^d$.  
 Apply FFT → learnable spectral filter → inverse FFT.  
-Introduce sparsity in the spectral domain: only keep top-$k$ frequency coefficients per token.
+Introduce sparsity in the spectral domain: only keep $top-k$ frequency coefficients per token.
 
 **Implementation:**  
 - FFT($x$) → $X(f)$  
-- Mask frequencies: keep only top-$k$ amplitudes or learned mask (sparse tensor)  
+- Mask frequencies: keep only $top-k$ amplitudes or learned mask (sparse tensor)  
 - Apply learnable spectral filter on the sparse coefficients  
 - Inverse FFT → token output  
 
@@ -225,7 +225,7 @@ Introduce sparsity in the factor matrices ($top-k$ elements per row/column)
 
 | Layer Type | Method | Sparsity Option | FLOPs Savings |
 |------------|--------|----------------|---------------|
-| Token transformation | Spectral FFN | Top-$k$ freq coefficients | ~10–20× |
+| Token transformation | Spectral FFN | $top-k$ freq coefficients | ~10–20× |
 | Non-linearity | Polynomial / Chebyshev | Sparse coefficients | ~4–8× |
 | Iterative refinement | Token-feedback FFN | Sparse feedback / low-rank | ~3–5× |
 | Matrix factorization | Tensor FFN | Sparse factor matrices | ~4–10× |
