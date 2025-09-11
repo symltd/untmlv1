@@ -1,8 +1,19 @@
 #!/bin/bash
-# Example run script
+# run.sh - Example DDP training runs for GPT-2 (4 GPUs)
 
-# 2 GPUs with profiling
-torchrun --nproc_per_node=2 train_ddp.py --epochs 1 --per_device_batch 4 --max_steps 10 --profile
+# ------------------------------
+# Quick test with profiling (small number of steps)
+# ------------------------------
+torchrun --nproc_per_node=4 train_ddp.py \
+    --epochs 1 \
+    --per_device_batch 16 \
+    --max_steps 20 \
+    --profile
 
-# 8 GPUs full run
-# torchrun --nproc_per_node=8 train_ddp.py --epochs 1 --per_device_batch 8 --max_steps 200
+# ------------------------------
+# Full run (uncomment for full training)
+# ------------------------------
+# torchrun --nproc_per_node=4 train_ddp.py \
+#     --epochs 2 \
+#     --per_device_batch 16 \
+#     --max_steps 10000
