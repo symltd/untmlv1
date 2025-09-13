@@ -9,6 +9,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
 from torch.profiler import profile, record_function, ProfilerActivity
+from torch.utils.tensorboard import SummaryWriter
 
 # ------------------------------
 # CLI Arguments
@@ -18,6 +19,7 @@ parser.add_argument("--epochs", type=int, default=2)
 parser.add_argument("--per_device_batch", type=int, default=16)
 parser.add_argument("--max_steps", type=int, default=-1)
 parser.add_argument("--profile", action="store_true")
+parser.add_argument("--logdir", type=str, default="./logs")
 args = parser.parse_args()
 
 # ------------------------------
@@ -58,12 +60,15 @@ def setup_ddp():
 def train(rank, world_size):
     device = torch.device(f"cuda:{rank}")
 
-    # Load model and tokenizer if you look for fine-tuning
-    # tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    # model = GPT2LMHeadModel.from_pretrained("gpt2")
-    # else, for training from scratch:
+    # TensorBoard logger (only rank 0)
+    writer = None
+    if rank == 0:
+        writer = SummaryWriter(log_dir=args.logdir)
+
+    # Load tokenizer (reuse GPT-2 vocab)
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    # Define new model config
+
+    # GPT-2 config (train from scratch)
     config = GPT2Config(
         vocab_size=len(tokenizer),
         n_positions=128,
@@ -76,7 +81,7 @@ def train(rank, world_size):
     model.to(device)
     model = DDP(model, device_ids=[rank])
 
-    # Dataset and DataLoader
+    # Dataset / loader
     dataset = RandomTextDataset(tokenizer)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
     dataloader = DataLoader(
@@ -88,14 +93,15 @@ def train(rank, world_size):
 
     optimizer = optim.AdamW(model.parameters(), lr=5e-5)
 
-    # Profiler context
+    # Profiler (optional)
     prof = None
     if args.profile and rank == 0:
         prof = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             record_shapes=True,
             profile_memory=True,
-            with_stack=True
+            with_stack=False,  # keep lighter
+            on_trace_ready=None  # we handle logging manually
         )
         prof.__enter__()
 
@@ -118,16 +124,31 @@ def train(rank, world_size):
                 loss.backward()
                 optimizer.step()
 
-            if rank == 0 and step_count % 50 == 0:
-                print(f"[Rank {rank}] Epoch {epoch} Step {step_count} Loss {loss.item():.4f}")
+            if rank == 0:
+                if step_count % 50 == 0:
+                    print(f"[Rank {rank}] Epoch {epoch} Step {step_count} Loss {loss.item():.4f}")
+                    if writer:
+                        writer.add_scalar("Loss/train", loss.item(), step_count)
+
+                # Log profiler stats
+                if prof is not None and step_count % 20 == 0 and step_count > 0:
+                    events = prof.key_averages(group_by_input_shape=True)
+                    for evt in events:
+                        # memory in MB
+                        mem = (evt.cuda_memory_usage / (1024 * 1024)) if evt.cuda_memory_usage else 0
+                        flops = evt.flops if hasattr(evt, "flops") else 0
+                        # sanitize layer name
+                        name = evt.key.replace("/", "_").replace(" ", "_")
+                        writer.add_scalar(f"FLOPs/{name}", flops, step_count)
+                        writer.add_scalar(f"MemoryMB/{name}", mem, step_count)
 
             step_count += 1
 
-    # Finish profiler
+    # Close profiler and writer
     if prof is not None:
         prof.__exit__(None, None, None)
-        prof.export_chrome_trace("ddp_gpt2_profiler_trace.json")
-        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    if writer is not None:
+        writer.close()
 
 # ------------------------------
 # Main
