@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
 from torch.profiler import profile, record_function, ProfilerActivity
 
 # ------------------------------
@@ -58,9 +58,21 @@ def setup_ddp():
 def train(rank, world_size):
     device = torch.device(f"cuda:{rank}")
 
-    # Load model and tokenizer
+    # Load model and tokenizer if you look for fine-tuning
+    # tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    # model = GPT2LMHeadModel.from_pretrained("gpt2")
+    # else, for training from scratch:
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    model = GPT2LMHeadModel.from_pretrained("gpt2")
+    # Define new model config
+    config = GPT2Config(
+        vocab_size=len(tokenizer),
+        n_positions=128,
+        n_ctx=128,
+        n_embd=768,
+        n_layer=12,
+        n_head=12
+    )
+    model = GPT2LMHeadModel(config)
     model.to(device)
     model = DDP(model, device_ids=[rank])
 
