@@ -131,16 +131,18 @@ def train(rank, world_size):
                         writer.add_scalar("Loss/train", loss.item(), step_count)
 
                 # Log profiler stats
-                if prof is not None and step_count % 20 == 0 and step_count > 0:
-                    events = prof.key_averages(group_by_input_shape=True)
-                    for evt in events:
-                        # memory in MB
-                        mem = (evt.cuda_memory_usage / (1024 * 1024)) if evt.cuda_memory_usage else 0
-                        flops = evt.flops if hasattr(evt, "flops") else 0
-                        # sanitize layer name
-                        name = evt.key.replace("/", "_").replace(" ", "_")
-                        writer.add_scalar(f"FLOPs/{name}", flops, step_count)
-                        writer.add_scalar(f"MemoryMB/{name}", mem, step_count)
+                if prof is not None:
+                    if step_count % 20 == 0 and step_count > 0:
+                        events = prof.key_averages(group_by_input_shape=True)
+                        for evt in events:
+                            # memory in MB
+                            mem = (evt.cuda_memory_usage / (1024 * 1024)) if evt.cuda_memory_usage else 0
+                            flops = evt.flops if hasattr(evt, "flops") else 0
+                            # sanitize layer name
+                            name = evt.key.replace("/", "_").replace(" ", "_")
+                            writer.add_scalar(f"FLOPs/{name}", flops, step_count)
+                            writer.add_scalar(f"MemoryMB/{name}", mem, step_count)
+                    prof.step()
 
             step_count += 1
 
