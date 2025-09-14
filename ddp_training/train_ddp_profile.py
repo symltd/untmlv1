@@ -101,7 +101,7 @@ def estimate_ffn_flops(d_model, d_ff, seq_len, batch_size, sparsity=0.0):
 # ------------------------------
 # Training Loop
 # ------------------------------
-def train(rank, world_size):
+def train(name, rank, world_size):
     device = torch.device(f"cuda:{rank}")
 
     # TensorBoard logger (only rank 0)
@@ -110,6 +110,9 @@ def train(rank, world_size):
     if rank == 0:
         writer = SummaryWriter(log_dir=log_path)
     
+    # Load tokenizer (reuse GPT-2 vocab)
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
     # Config
     vocab_size=len(tokenizer)
     n_positions=128
@@ -120,8 +123,6 @@ def train(rank, world_size):
     batch_size=args.per_device_batch
     ffn_expansion=4
 
-    # Load tokenizer (reuse GPT-2 vocab)
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
     # GPT-2 config (train from scratch)
     config = GPT2Config(
@@ -205,11 +206,8 @@ def train(rank, world_size):
                         torch.cuda.synchronize()
                         mem = (evt.cuda_memory_usage / (1024 * 1024)) if evt.cuda_memory_usage else 0
                         # mem = torch.cuda.max_memory_allocated() / 1024**2
-                        
-                        flops = evt.flops if hasattr(evt, "flops") else 0
                         # sanitize layer name
                         name = evt.key.replace("/", "_").replace(" ", "_")
-                        writer.add_scalar(f"FLOPs/{name}", flops, step_count)
                         writer.add_scalar(f"MemoryMB/{name}", mem, step_count)
                         # TensorBoard logger (only rank 0)
                     prof.step()
@@ -228,4 +226,4 @@ def train(rank, world_size):
 # ------------------------------
 if __name__ == "__main__":
     rank, world_size = setup_ddp()
-    train(rank, world_size)
+    train("Baseline-GPT2", rank, world_size)
