@@ -4,10 +4,10 @@
 # ------------------------------
 # Quick test with profiling (small number of steps)
 # ------------------------------
-torchrun --nproc_per_node=4 train_ddp.py \
+torchrun --nproc_per_node=4 train_ddp_profile.py \
     --epochs 1 \
     --per_device_batch 16 \
-    --max_steps 20 \
+    --max_steps 100 \
     --profile
 
 # ------------------------------

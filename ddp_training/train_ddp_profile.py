@@ -1,5 +1,5 @@
 # profile_compare_profiler.py
-from models.sparse_ffn import UltraEfficientSparseFFN
+# from models.sparse_ffn import UltraEfficientSparseFFN
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
@@ -63,10 +63,10 @@ def setup_ddp():
 # ------------------------------
 # Patch GPT-2 with sparse FFN
 # ------------------------------
-def patch_sparse_ffn(model, hidden_size, device):
-    for block in model.transformer.h:
-        block.mlp = UltraEfficientSparseFFN(hidden_size).to(device)
-    return model
+# def patch_sparse_ffn(model, hidden_size, device):
+#     for block in model.transformer.h:
+#         block.mlp = UltraEfficientSparseFFN(hidden_size).to(device)
+#     return model
 
 # ------------------------------
 # Estimate FLOPs per FFN layer
@@ -118,7 +118,7 @@ def train(name, rank, world_size):
     n_positions=128
     n_ctx=128
     n_embd=768
-    n_layer=12
+    n_layer=4
     n_head=12
     batch_size=args.per_device_batch
     ffn_expansion=4
@@ -194,22 +194,18 @@ def train(name, rank, world_size):
                                 batch_size,
                                 sparsity=0.5 if "Sparse" in name else 0.0,
                             )
-                            writer.add_scalar(f"Layer_{i+1}_Dense_GFLOPs", dense / 1e9, 0)
-                            writer.add_scalar(f"Layer_{i+1}_Sparse_GFLOPs", sparse / 1e9, 0)
+                            writer.add_scalar(f"Layer_{i+1}_Dense_GFLOPs", dense / 1e9, step_count)
+                            writer.add_scalar(f"Layer_{i+1}_Sparse_GFLOPs", sparse / 1e9, step_count)
+                            
+                            mem = torch.cuda.max_memory_allocated() / 1024**2
+                            writer.add_scalar(f"PeakMemoryMB", mem, step_count)
 
                 # Log profiler stats
                 # if prof is not None and step_count % 20 == 0 and step_count > 0:
-                if prof is not None and step_count % 2 == 0 and step_count > 0:
-                    events = prof.key_averages(group_by_input_shape=True)
-                    for evt in events:
-                        # memory in MB
+                if prof is not None:
+                    if step_count % 2 == 0 and step_count > 0:
                         torch.cuda.synchronize()
-                        mem = (evt.cuda_memory_usage / (1024 * 1024)) if evt.cuda_memory_usage else 0
-                        # mem = torch.cuda.max_memory_allocated() / 1024**2
-                        # sanitize layer name
-                        name = evt.key.replace("/", "_").replace(" ", "_")
-                        writer.add_scalar(f"MemoryMB/{name}", mem, step_count)
-                        # TensorBoard logger (only rank 0)
+                        mem = torch.cuda.max_memory_allocated() / 1024**2
                     prof.step()
             step_count += 1
 
