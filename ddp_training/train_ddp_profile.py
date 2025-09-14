@@ -1,6 +1,7 @@
 # profile_compare_profiler.py
 # from models.sparse_ffn import UltraEfficientSparseFFN
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
@@ -103,6 +104,7 @@ def estimate_ffn_flops(d_model, d_ff, seq_len, batch_size, sparsity=0.0):
 # ------------------------------
 def train(name, rank, world_size):
     device = torch.device(f"cuda:{rank}")
+    torch.cuda.reset_peak_memory_stats(device)
 
     # TensorBoard logger (only rank 0)
     log_path = args.logdir + f"/{name.replace(' ', '_')}"
@@ -164,7 +166,11 @@ def train(name, rank, world_size):
     step_count = 0
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
+        epoch_start
+        if rank == 0:
+            epoch_start = time.perf_counter()
         for input_ids, labels in dataloader:
+            step_start = time.perf_counter()
             if args.max_steps > 0 and step_count >= args.max_steps:
                 break
 
@@ -180,34 +186,49 @@ def train(name, rank, world_size):
                 loss.backward()
                 optimizer.step()
 
+            step_time = time.perf_counter() - step_start
+
+            peak_mem_mb = torch.cuda.max_memory_allocated(device) / 1024**2
+            # Gather peak memory from all ranks to rank 0
+            if world_size > 1:
+                mem_tensor = torch.tensor([peak_mem_mb], device=device)
+                mem_list = [torch.zeros_like(mem_tensor) for _ in range(world_size)]
+                dist.all_gather(mem_list, mem_tensor)
+                mem_list = [m.item() for m in mem_list]
+            else:
+                mem_list = [peak_mem_mb]
+
             if rank == 0:
+                if writer:
+                    writer.add_scalar("StepTime", step_time, step_count)
+                    writer.add_scalar("Loss/train", loss.item(), step_count)
+                    for i in range(n_layer):
+                        dense, sparse = estimate_ffn_flops(
+                            n_embd,
+                            n_embd * ffn_expansion,
+                            n_ctx,
+                            batch_size,
+                            sparsity=0.5,
+                        )
+                        writer.add_scalar(f"Layer_{i+1}_GFLOPs", dense / 1e9, step_count)
+                        #writer.add_scalar(f"Layer_{i+1}_Sparse_GFLOPs", sparse / 1e9, step_count)
+                    avg_mem = sum(mem_list) / len(mem_list)
+                    writer.add_scalar(f"PeakMemoryMB_Avg", avg_mem, step_count)
+                    for r, m in enumerate(mem_list):
+                        writer.add_scalar(f"PeakMemoryMB_rank{r}", m, step_count)
                 #if step_count % 50 == 0:
                 if step_count % 5 == 0:
                     print(f"[Rank {rank}] Epoch {epoch} Step {step_count} Loss {loss.item():.4f}")
-                    if writer:
-                        writer.add_scalar("Loss/train", loss.item(), step_count)
-                        for i in range(n_layer):
-                            dense, sparse = estimate_ffn_flops(
-                                n_embd,
-                                n_embd * ffn_expansion,
-                                n_ctx,
-                                batch_size,
-                                sparsity=0.5 if "Sparse" in name else 0.0,
-                            )
-                            writer.add_scalar(f"Layer_{i+1}_Dense_GFLOPs", dense / 1e9, step_count)
-                            writer.add_scalar(f"Layer_{i+1}_Sparse_GFLOPs", sparse / 1e9, step_count)
-                            
-                            mem = torch.cuda.max_memory_allocated() / 1024**2
-                            writer.add_scalar(f"PeakMemoryMB", mem, step_count)
-
                 # Log profiler stats
                 # if prof is not None and step_count % 20 == 0 and step_count > 0:
                 if prof is not None:
-                    if step_count % 2 == 0 and step_count > 0:
-                        torch.cuda.synchronize()
-                        mem = torch.cuda.max_memory_allocated() / 1024**2
                     prof.step()
+
             step_count += 1
+        if rank == 0:
+            epoch_time = time.perf_counter() - epoch_start
+            print(f"[Rank {rank}] Epoch {epoch} completed in {epoch_time:.2f} seconds")
+            writer.add_scalar("EpochTime", epoch_time, epoch)
 
     # Close profiler and writer
     if prof is not None:
