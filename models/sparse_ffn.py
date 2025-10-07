@@ -49,8 +49,8 @@ class SparsePolynomial(nn.Module):
         x = _shape_check(x)
         B, T, D = x.shape
         keep = max(1, int(D * self.keep_ratio))
-        with torch.no_grad():
-            topk_idx = torch.topk(self.importance, keep, dim=-1).indices
+        # with torch.no_grad():
+        topk_idx = torch.topk(self.importance, keep, dim=-1).indices
         x_act = x[..., topk_idx]  # [B,T,keep]
         y_act = torch.zeros_like(x_act)
         x_power = x_act
@@ -64,6 +64,8 @@ class SparsePolynomial(nn.Module):
             x_unused = x.clone()
             x_unused[..., topk_idx] = 0
             _ = x_unused.sum() * 0.0
+            dummy_loss = x_unused.norm(p=2) * 1e-6
+            y = y + dummy_loss
         return y
 
 class SparseMicroRefine(nn.Module):
@@ -82,8 +84,8 @@ class SparseMicroRefine(nn.Module):
             return x
         B, T, D = x.shape
         keep = max(1, int(D * self.keep_ratio))
-        with torch.no_grad():
-            idx = torch.topk(self.importance, keep, dim=-1).indices
+        #with torch.no_grad():
+        idx = torch.topk(self.importance, keep, dim=-1).indices
         y = x
         xt = y[..., idx].reshape(B*T, keep, 1)
         for lin in self.linears:
@@ -94,7 +96,8 @@ class SparseMicroRefine(nn.Module):
         if keep < D:
             x_unused = y.clone()
             x_unused[..., idx] = 0
-            _ = x_unused.sum() * 0.0
+            dummy_loss = x_unused.norm(p=2) * 1e-6
+            y = y + dummy_loss
         return y
 
 class UltraEfficientSparseFFN(nn.Module):

@@ -1,3 +1,6 @@
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # profile_compare_profiler.py
 # from models.sparse_ffn import UltraEfficientSparseFFN
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -9,7 +12,6 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
 from models.sparse_ffn import UltraEfficientSparseFFN
 import argparse
 import gc
-import os
 import random
 import string
 import time
@@ -170,9 +172,11 @@ def train(name, rank, world_size):
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
         if rank == 0:
+            torch.cuda.synchronize()
             epoch_start = time.perf_counter()
         for input_ids, labels in dataloader:
-            step_start = time.perf_counter()
+            if rank == 0:
+                step_start = time.perf_counter()
             if args.max_steps > 0 and step_count >= args.max_steps:
                 break
 
@@ -188,7 +192,8 @@ def train(name, rank, world_size):
                 loss.backward()
                 optimizer.step()
 
-            step_time = time.perf_counter() - step_start
+            if rank == 0:
+                step_time = time.perf_counter() - step_start
 
             peak_mem_mb = torch.cuda.max_memory_allocated(device) / 1024**2
             # Gather peak memory from all ranks to rank 0
@@ -212,8 +217,7 @@ def train(name, rank, world_size):
                             batch_size,
                             sparsity=0.5,
                         )
-                        writer.add_scalar(f"Layer_{i+1}_GFLOPs", dense / 1e9, step_count)
-                        writer.add_scalar(f"Layer_{i+1}_Sparse_GFLOPs", sparse / 1e9, step_count)
+                        writer.add_scalar(f"Layer_{i+1}_GFLOPs", sparse / 1e9, step_count)
                     avg_mem = sum(mem_list) / len(mem_list)
                     writer.add_scalar(f"PeakMemoryMB_Avg", avg_mem, step_count)
                     for r, m in enumerate(mem_list):
