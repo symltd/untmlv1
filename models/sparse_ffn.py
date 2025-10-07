@@ -59,6 +59,11 @@ class SparsePolynomial(nn.Module):
             x_power = x_power * x_act
         y = x.clone()
         y[..., topk_idx] = y_act
+        # ---- DDP unused parameter ----
+        if keep < D:
+            x_unused = x.clone()
+            x_unused[..., topk_idx] = 0
+            _ = x_unused.sum() * 0.0
         return y
 
 class SparseMicroRefine(nn.Module):
@@ -85,6 +90,11 @@ class SparseMicroRefine(nn.Module):
             xt = self.act(lin(xt))
         y = y.clone()
         y[..., idx] = xt.reshape(B, T, keep)
+        # ---- DDP unused parameter ----
+        if keep < D:
+            x_unused = y.clone()
+            x_unused[..., idx] = 0
+            _ = x_unused.sum() * 0.0
         return y
 
 class UltraEfficientSparseFFN(nn.Module):
