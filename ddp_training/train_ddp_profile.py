@@ -166,7 +166,6 @@ def train(name, rank, world_size):
     step_count = 0
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
-        epoch_start
         if rank == 0:
             epoch_start = time.perf_counter()
         for input_ids, labels in dataloader:
@@ -225,6 +224,7 @@ def train(name, rank, world_size):
                     prof.step()
 
             step_count += 1
+        # dist.barrier()
         if rank == 0:
             epoch_time = time.perf_counter() - epoch_start
             print(f"[Rank {rank}] Epoch {epoch} completed in {epoch_time:.2f} seconds")
