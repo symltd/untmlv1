@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 
 def _shape_check(x: torch.Tensor) -> torch.Tensor:
     if x.dim() != 3:
@@ -36,138 +37,88 @@ class SparseSpectral(nn.Module):
             y = y + self.bias
         return y
 
-def _shape_check(x: torch.Tensor) -> torch.Tensor:
-    if x.dim() != 3:
-        raise ValueError(f"Expected 3D tensor [batch, seq, hidden], got {tuple(x.shape)}")
-    return x
-
-
 class SparsePolynomial(nn.Module):
-    """
-    Differentiable sparse polynomial activation.
-
-    During training:
-      - Uses a soft sigmoid-based mask on `importance` for differentiable gating.
-      - No need for find_unused_parameters=True under DDP.
-
-    During inference (model.eval()):
-      - Applies hard top-k selection for true sparsity.
-
-    Args:
-        hidden_dim: Transformer hidden size.
-        degree: Polynomial expansion degree.
-        keep_ratio: Fraction of dimensions to keep active.
-    """
-
-    def __init__(self, hidden_dim: int, degree: int = 3, keep_ratio: float = 0.5):
+    def __init__(self, hidden_dim: int, degree: int = 3, keep_ratio: float = 0.5, soft_ratio: float = 0.1):
         super().__init__()
         self.d = hidden_dim
         self.K = max(1, degree)
         self.keep_ratio = float(min(1.0, max(0.0, keep_ratio)))
-
+        self.soft_ratio = float(min(1.0, max(0.0, soft_ratio)))
         self.coeffs = nn.Parameter(torch.randn(self.K) / (self.K ** 0.5))
-        self.importance = nn.Parameter(torch.zeros(self.d))  # learnable selector
+        self.importance = nn.Parameter(torch.zeros(self.d))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = _shape_check(x)
         B, T, D = x.shape
+        keep = max(1, int(D * self.keep_ratio))
+        use_soft = self.training and (random.random() < self.soft_ratio)
 
-        if self.training:
-            # ---- Soft differentiable selection ----
-            mask = torch.sigmoid(self.importance).view(1, 1, D)  # [1,1,D]
-            mask = mask / (mask.mean(dim=-1, keepdim=True) + 1e-6)
+        if use_soft:
+            # differentiable sigmoid gating
+            mask = torch.sigmoid(self.importance)
+            mask = mask / (mask.mean() + 1e-6)
             x_masked = x * mask
-
-            # Polynomial expansion over all dims (weighted by mask)
-            y = torch.zeros_like(x_masked)
-            x_power = x_masked
-            for k in range(self.K):
-                y = y + self.coeffs[k] * x_power
-                x_power = x_power * x_masked
-
         else:
-            # ---- Hard top-k selection for inference ----
-            keep = max(1, int(D * self.keep_ratio))
-            idx = torch.topk(self.importance, keep, dim=-1).indices  # [keep]
-            x_act = x[..., idx]  # [B,T,keep]
-            y_act = torch.zeros_like(x_act)
-            x_power = x_act
-            for k in range(self.K):
-                y_act = y_act + self.coeffs[k] * x_power
-                x_power = x_power * x_act
-            y = x.clone()
-            y[..., idx] = y_act
+            # fast top-k gating
+            with torch.no_grad():
+                topk_idx = torch.topk(self.importance, keep, dim=-1).indices
+            x_masked = torch.zeros_like(x)
+            x_masked[..., topk_idx] = x[..., topk_idx]
+
+        # polynomial expansion
+        y = torch.zeros_like(x_masked)
+        x_power = x_masked
+        for k in range(self.K):
+            y = y + self.coeffs[k] * x_power
+            x_power = x_power * x_masked
+
+        if not use_soft:
+            y_full = x.clone()
+            y_full[..., topk_idx] = y[..., topk_idx]
+            y = y_full
 
         return y
 
 class SparseMicroRefine(nn.Module):
-    """
-    Differentiable sparse refinement block.
-
-    During training:
-      - Uses a soft sigmoid-based mask (importance -> [0,1]) for differentiable gating.
-      - No need for find_unused_parameters=True under DDP.
-
-    During inference (model.eval()):
-      - Uses hard top-k selection for actual sparsity.
-
-    Args:
-        hidden_dim: Transformer hidden size.
-        steps: Number of micro refinement layers.
-        keep_ratio: Fraction of neurons to refine (sparsity level).
-        activation: 'silu' or 'gelu'.
-    """
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        steps: int = 2,
-        keep_ratio: float = 0.25,
-        activation: str = "silu",
-    ):
+    def __init__(self, hidden_dim: int, steps: int = 2, keep_ratio: float = 0.25,
+                 activation: str = "silu", soft_ratio: float = 0.1):
         super().__init__()
         self.d = hidden_dim
         self.steps = max(0, steps)
         self.keep_ratio = float(min(1.0, max(0.0, keep_ratio)))
-        self.importance = nn.Parameter(torch.zeros(hidden_dim))  # learnable selector
-
+        self.soft_ratio = float(min(1.0, max(0.0, soft_ratio)))
+        self.importance = nn.Parameter(torch.zeros(self.d))
         self.act = nn.SiLU() if activation == "silu" else nn.GELU()
         self.linears = nn.ModuleList([nn.Linear(1, 1, bias=True) for _ in range(self.steps)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.steps == 0 or self.keep_ratio <= 0.0:
             return x
-
         B, T, D = x.shape
-        h = x.clone()
+        keep = max(1, int(D * self.keep_ratio))
+        use_soft = self.training and (random.random() < self.soft_ratio)
 
-        if self.training:
-            # ---- Soft differentiable selection ----
-            # Learnable continuous mask in [0, 1]
-            mask = torch.sigmoid(self.importance).view(1, 1, D)  # [1,1,D]
-            # Normalize to keep energy comparable
-            mask = mask / (mask.mean(dim=-1, keepdim=True) + 1e-6)
-            # Apply mask softly
-            h = h * mask
-            xt = h.reshape(B * T * D, 1)
-            for lin in self.linears:
-                xt = self.act(lin(xt))
-            y = xt.reshape(B, T, D)
-            # blend back (residual)
-            out = x + y
-
+        if use_soft:
+            mask = torch.sigmoid(self.importance)
+            mask = mask / (mask.mean() + 1e-6)
+            x_masked = x * mask
         else:
-            # ---- Hard top-k for inference ----
-            keep = max(1, int(D * self.keep_ratio))
-            idx = torch.topk(self.importance, keep, dim=-1).indices
-            xt = h[..., idx].reshape(B * T, keep, 1)
-            for lin in self.linears:
-                xt = self.act(lin(xt))
-            h[..., idx] = xt.reshape(B, T, keep)
-            out = h
+            with torch.no_grad():
+                idx = torch.topk(self.importance, keep, dim=-1).indices
+            x_masked = torch.zeros_like(x)
+            x_masked[..., idx] = x[..., idx]
 
-        return out
+        # refinement microsteps
+        xt = x_masked.reshape(B*T, D, 1)
+        for lin in self.linears:
+            xt = self.act(lin(xt))
+        y = xt.reshape(B, T, D)
 
+        if not use_soft:
+            y_full = x.clone()
+            y_full[..., idx] = y[..., idx]
+            y = y_full
+
+        return y
 
 class UltraEfficientSparseFFN(nn.Module):
     def __init__(
